@@ -13,14 +13,20 @@ import com.cleaner.djuav.util.FileUtils;
 import com.cleaner.djuav.util.RouteFileUtils;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Objects;
 
@@ -113,20 +119,32 @@ public class UavRouteServiceImpl implements UavRouteService {
     public KmzInfoVO parseKmz(String fileUrl) throws IOException {
         KmzInfoVO kmzInfoVO = new KmzInfoVO();
         File file = FileUtils.downloadUrlToTempFile(fileUrl);
-        try (ArchiveInputStream archiveInputStream = new ZipArchiveInputStream(FileUtil.getInputStream(file))) {
-            ArchiveEntry entry;
-            while (!Objects.isNull(entry = archiveInputStream.getNextEntry())) {
-                String name = entry.getName();
-                if (name.toLowerCase().endsWith(".kml")) {
-                    kmzInfoVO.setKmlInfo(RouteFileUtils.parseKml(archiveInputStream));
-                } else if (name.toLowerCase().endsWith(".wpml")) {
-                    kmzInfoVO.setWpmlInfo(RouteFileUtils.parseKml(archiveInputStream));
+        try {
+            this.populateKmzInfo(kmzInfoVO, file, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            // 当条目名包含非 UTF-8 字符时，降级尝试 GBK
+            this.populateKmzInfo(kmzInfoVO, file, Charset.forName("GBK"));
+        }
+        return kmzInfoVO;
+    }
+
+    private void populateKmzInfo(KmzInfoVO kmzInfoVO, File file, Charset charset) throws IOException {
+        try (ZipFile zipFile = new ZipFile(file, charset.name())) {
+            Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                String name = entry.getName().toLowerCase();
+                try (InputStream entryStream = zipFile.getInputStream(entry)) {
+                    if (name.endsWith(".kml")) {
+                        kmzInfoVO.setKmlInfo(RouteFileUtils.parseKml(entryStream));
+                    } else if (name.endsWith(".wpml")) {
+                        kmzInfoVO.setWpmlInfo(RouteFileUtils.parseKml(entryStream));
+                    }
                 }
             }
-            return kmzInfoVO;
-        } catch (Exception e) {
-            e.printStackTrace();
         }
-        return null;
     }
 }
